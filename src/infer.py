@@ -89,9 +89,9 @@ def main():
     ap.add_argument("--ckpt", type=str, default="checkpoints/last.pt")
     ap.add_argument("--prompt", type=str, required=True)
     ap.add_argument("--max_new_tokens", type=int, default=64)
-    ap.add_argument("--temperature", type=float, default=0.0)
+    ap.add_argument("--temperature", type=float, default=0.8)
     ap.add_argument("--top_k", type=int, default=0)
-    ap.add_argument("--top_p", type=float, default=1.0)
+    ap.add_argument("--top_p", type=float, default=0.9)
     ap.add_argument("--repetition_penalty", type=float, default=1.0)
     ap.add_argument("--stop_strings", nargs='*', default=None)
     ap.add_argument("--show_label", action="store_true")
@@ -107,6 +107,7 @@ def main():
         n_embd=cfg["model"]["n_embd"],
         seq_len=cfg["model"]["seq_len"],
         dropout=cfg["model"]["dropout"],
+        use_flash=False,  # 推理时禁用 Flash Attention
     )
     sd = obj["model"]
     packed = any("_packed_params" in k for k in sd.keys())

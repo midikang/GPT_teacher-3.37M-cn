@@ -30,7 +30,7 @@ def get_device(want: str | None = None):
     raise RuntimeError(f"Unknown device option: {want}. Available options: auto, cpu")
 
 
-def train(device_arg: str | None = None):
+def train(device_arg: str | None = None, use_flash: bool = True):
     cfg = load_config("config.yaml")
     set_seed(cfg["training"]["seed"])
     torch.set_num_threads(num_threads())
@@ -43,6 +43,7 @@ def train(device_arg: str | None = None):
         n_embd=cfg["model"]["n_embd"],
         seq_len=seq_len,
         dropout=cfg["model"]["dropout"],
+        use_flash=use_flash,
     )
     device = get_device(device_arg)
     model.to(device)
@@ -80,11 +81,21 @@ def train(device_arg: str | None = None):
     loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
     save_dir = cfg["training"]["save_dir"]
     ensure_dir(save_dir)
+    
+    early_stopping_patience = cfg["training"].get("early_stopping_patience", 5)
+    best_val_loss = float("inf")
+    best_step = 0
+    patience_counter = 0
+    early_stop_triggered = False
+    
+    val_losses = []
+    train_losses = []
+    
     step = 0
     accum = 0
     model.train()
     start_time = time.time()
-    while step < total_steps:
+    while step < total_steps and not early_stop_triggered:
         for xb, yb in train_loader:
             xb = xb.to(device)
             yb = yb.to(device)
@@ -99,33 +110,79 @@ def train(device_arg: str | None = None):
                 sched.step()
                 step += 1
                 accum = 0
+                
+                train_losses.append(loss.item())
+                
                 if step % 10 == 0:
                     print(
                         f"step {step} loss {loss.item():.4f} lr {sched.get_last_lr()[0]:.6f}"
                     )
-                if step % cfg["training"]["eval_interval"] == 0:
-                    eval_loss = evaluate(model, val_loader, loss_fn, device)
-                    elapsed = time.time() - start_time
-                    print(f"eval loss {eval_loss:.4f} elapsed {elapsed:.1f}s")
+            if step % cfg["training"]["eval_interval"] == 0:
+                eval_loss = evaluate(model, val_loader, loss_fn, device)
+                elapsed = time.time() - start_time
+                print(f"eval loss {eval_loss:.4f} elapsed {elapsed:.1f}s")
+                
+                val_losses.append(eval_loss)
+                
+                if eval_loss < best_val_loss:
+                    best_val_loss = eval_loss
+                    best_step = step
+                    patience_counter = 0
                     torch.save(
                         {"model": model.state_dict(), "cfg": cfg},
-                        os.path.join(save_dir, "last.pt"),
+                        os.path.join(save_dir, "best.pt"),
                     )
-                if step >= total_steps:
-                    break
+                    print(f"  → 新的最佳模型保存 (step {step})")
+                else:
+                    patience_counter += 1
+                    print(f"  → 验证损失未改善 ({patience_counter}/{early_stopping_patience})")
+                    if patience_counter >= early_stopping_patience:
+                        print(f"\n=== 早停触发 (step {step}) ===")
+                        print(f"最佳验证损失: {best_val_loss:.4f} (step {best_step})")
+                        print(f"总训练时间: {elapsed:.1f}s")
+                        torch.save(
+                            {"model": model.state_dict(), "cfg": cfg},
+                            os.path.join(save_dir, "last.pt"),
+                        )
+                        early_stop_triggered = True
+                
+                torch.save(
+                    {"model": model.state_dict(), "cfg": cfg},
+                    os.path.join(save_dir, "last.pt"),
+                )
+            if step >= total_steps or early_stop_triggered:
+                break
     torch.save(
         {"model": model.state_dict(), "cfg": cfg}, os.path.join(save_dir, "last.pt")
     )
     total_elapsed = time.time() - start_time
     with open(os.path.join(save_dir, "train_time.txt"), "w") as f:
         f.write(f"elapsed_seconds={total_elapsed:.2f}\n")
-    qmodel = torch.quantization.quantize_dynamic(
-        model.to("cpu"), {nn.Linear}, dtype=torch.qint8
-    )
-    torch.save(
-        {"model": qmodel.state_dict(), "cfg": cfg},
-        os.path.join(save_dir, "quantized.pt"),
-    )
+    
+    with open(os.path.join(save_dir, "train_history.json"), "w") as f:
+        import json
+        json.dump({
+            "train_losses": train_losses,
+            "val_losses": val_losses,
+            "best_val_loss": best_val_loss,
+            "best_step": best_step,
+            "total_steps": step,
+            "early_stopped": early_stop_triggered
+        }, f, indent=2)
+    print(f"✓ 训练历史已保存到 {save_dir}/train_history.json")
+    
+    try:
+        qmodel = torch.quantization.quantize_dynamic(
+            model.to("cpu"), {nn.Linear}, dtype=torch.qint8
+        )
+        torch.save(
+            {"model": qmodel.state_dict(), "cfg": cfg},
+            os.path.join(save_dir, "quantized.pt"),
+        )
+        print(f"✓ 量化模型已保存到 {save_dir}/quantized.pt")
+    except Exception as e:
+        print(f"⚠ 量化失败（跳过量化步骤）: {e}")
+        print(f"  注意: 某些平台（如Mac）可能不支持动态量化，这不影响模型使用")
 
 
 def evaluate(model, loader, loss_fn, device):
@@ -147,5 +204,6 @@ def evaluate(model, loader, loss_fn, device):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--device", type=str, default="auto", choices=["auto", "cpu"])
+    ap.add_argument("--no-flash", action="store_true", help="禁用 Flash Attention")
     args = ap.parse_args()
-    train(args.device)
+    train(args.device, use_flash=not args.no_flash)

@@ -1,22 +1,23 @@
-model:
-  n_layer: 4
-  n_head: 4
-  n_embd: 256
-  seq_len: 128
-  dropout: 0.0
-training:
-  batch_size: 16
-  micro_batch: 4
-  lr: 0.0003
-  weight_decay: 0.01
-  max_steps: 2000
-  warmup_steps: 5
-  eval_interval: 20
-  save_dir: checkpoints
-  seed: 42
 data:
   train_path: data/train.jsonl
   val_path: data/val.jsonl
+model:
+  dropout: 0.1
+  n_embd: 256
+  n_head: 4
+  n_layer: 4
+  seq_len: 128
 tokenizer:
-  type: hf_tokenizers
   path: tokenizer/tokenizer.json
+  type: hf_tokenizers
+training:
+  batch_size: 16
+  early_stopping_patience: 5
+  eval_interval: 200
+  lr: 0.0003
+  max_steps: 3000
+  micro_batch: 4
+  save_dir: checkpoints
+  seed: 42
+  warmup_steps: 10
+  weight_decay: 0.01

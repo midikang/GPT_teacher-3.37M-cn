@@ -19,8 +19,14 @@ class InstructDataset(Dataset):
                 prefix = self.tok.encode("用户:" + prompt + "\n助手:", add_special_tokens=True)
                 comp = self.tok.encode(completion, add_special_tokens=False)
                 ids = prefix + comp + [self.tok.eos_id]
+                
                 if len(ids) > seq_len:
-                    ids = ids[:seq_len]
+                    max_comp_len = seq_len - len(prefix) - 1
+                    if max_comp_len > 0:
+                        ids = prefix + comp[:max_comp_len] + [self.tok.eos_id]
+                    else:
+                        ids = prefix[:seq_len-1] + [self.tok.eos_id]
+                
                 tar = ids[1:] + [self.tok.eos_id]
                 ignore = min(max(0, len(prefix) - 1), len(tar))
                 tar[:ignore] = [-100] * ignore
